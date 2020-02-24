@@ -65,6 +65,7 @@ int string2int(std::string s){
  int num=0;
  int d=1;
  for(int i=0;i<n;i++){
+  if(char2int(s[n-1-i])<0) continue;
   int digit=char2int(s[n-1-i]);
   if(digit == -1) return -1;
   num=num + d*digit;
@@ -84,8 +85,6 @@ private:
     uint branch;           // 1 = 01, 2=10, 3=-1-, 4= 0-1
     uint pushes;
     TreeNode *parent;
-    //std::vector<TreeNode*> children;
-    //TreeNode *children[10000];
     uint **pboard;
 public:
     TreeNode();
@@ -95,11 +94,13 @@ public:
     bool GetType(){return type;};
     uint GetX(){return i;};
     uint GetY(){return j;};
-    int GetIters(){return iters;};
+    uint GetIters(){return iters;};
     uint GetInPos(){return inpos;};
     //int GetNChildren(){return children.size();};
     //TreeNode* GetChild(int ii){return children[ii];};
     uint GetBranch(){return branch;};
+    uint GetPushes(){return pushes;};
+    void IncreasePushes(){pushes++;};
     void InPosition(uint ii){inpos+=ii;};
     void Iter(){iters++;};
     //void AddChild(TreeNode *child,int ii){children[ii]=child;}
@@ -112,7 +113,7 @@ public:
     void PrintBoard();
 };
 TreeNode::TreeNode():
-i(0),j(0),type(1),iters(0),inpos(0),branch(0),parent(0),pboard(0)
+i(0),j(0),type(1),iters(0),inpos(0),branch(0),pushes(0),parent(0),pboard(0)
 {
   pboard = new uint*[Nrow];
   for(uint i=0;i<Nrow;i++)
@@ -135,7 +136,7 @@ TreeNode::~TreeNode()
  }
 }
 TreeNode::TreeNode(uint ix,uint jx, bool type, TreeNode *parent):
-i(ix),j(jx),type(type),iters(parent->GetIters()),inpos(parent->GetInPos()),branch(0),parent(parent),pboard(0)
+i(ix),j(jx),type(type),iters(parent->GetIters()),inpos(parent->GetInPos()),branch(0),pushes(parent->GetPushes()),parent(parent),pboard(0)
 {
  //printf("Parent: %p \n",parent);
  CopyBoard(); 
@@ -169,7 +170,7 @@ void TreeNode::PrintBoard()
 class Sokoban
 {
  public:
-        Sokoban(int NITER);
+        Sokoban(int NITER,int NPUSH);
         ~Sokoban();
  	void InputBoard();
  	void InputBoard(std::string filename);
@@ -185,9 +186,9 @@ class Sokoban
         int GetNIters(){return fiter;};
         void SetDebug(bool deb){debug=deb;};
  private:
-	enum {fout=0, fin=1, ftar=2, fbox=4, fsoko=8, fpath=16 };
+	enum {fout=0, fin=1, ftar=2, fbox=4, fsoko=8, fpath=16, forb=32 };
 	// 0 not allowed; 1 board ;2 target field; 4 box; 8 sokoban; 
-        int NITER;
+        uint NITER,NPUSH;
         uint inPosTar,inPosBox;
         int fiter;
         int Nnodes;
@@ -206,8 +207,8 @@ class Sokoban
         void GetChild(uint branch, int& dx, int &dy);
 	TreeNode* go(TreeNode* node);
 };
-Sokoban::Sokoban(int NITER):
-NITER(NITER),inPosTar(0),inPosBox(0),fiter(0),Nnodes(0),debug(0),first(0)
+Sokoban::Sokoban(int NITER, int NPUSH):
+NITER(NITER),NPUSH(NPUSH),inPosTar(0),inPosBox(0),fiter(0),Nnodes(0),debug(0),first(0)
 {
 }
 Sokoban::~Sokoban()
@@ -271,6 +272,7 @@ int Sokoban::ReadBoard(std::string filename)
     for(uint i=0;i<Ncol;i++)
     {
       board[irow][i] = char2int(line[i]);
+      if(board[irow][i]==(fin+fbox+fsoko))board[irow][i]=forb+fin;  // this is only because I want to use one char for field
       if(isSoko(irow,i)) first->SetXY(irow,i);
       if(isPos(irow,i))inPosTar++;
       if(isBox(irow,i))inPosBox++;
@@ -356,7 +358,12 @@ TreeNode* Sokoban::go(TreeNode* node)
   node->IncreaseBranch();
   //printf("branch: %u \n",node->GetBranch());
   return node;
- } 
+ }
+ if(node->GetPushes()> NPUSH)
+ {
+  node->IncreaseBranch();
+  return node;
+ }
  uint ibranch = node->GetBranch();
  int dx,dy;
  this->GetChild(ibranch,dx,dy);
@@ -384,19 +391,25 @@ TreeNode* Sokoban::go(TreeNode* node)
   }   
   case (fin):
   case (fin+ftar):
+  case (fin+forb):
   {
      // empty field
-     if(node->GetParent())
+     TreeNode* iter = node;
+     uint moved=0;
+     //if(node->GetParent())
+     while(iter->GetParent())
      {
-        uint ip=node->GetParent()->GetX();
-        uint jp=node->GetParent()->GetY();
+        uint ip=iter->GetParent()->GetX();
+        uint jp=iter->GetParent()->GetY();
+	if(!(iter->GetType()))moved++;
 	//printf("Parent position  %i %i \n",ip,jp);
-	if((ip==i) && (jp==j) && node->GetType())
+	if((ip==i) && (jp==j) && (moved==0))
 	{
 	 if(debug)printf("Empty repetition \n");
          node->IncreaseBranch();   
 	 return node;
 	}
+	iter=iter->GetParent();
      }
      TreeNode *newpos = new TreeNode(i,j,1,node);
      //newpos->GetParent()->AddChild(newpos,ibranch);
@@ -410,11 +423,20 @@ TreeNode* Sokoban::go(TreeNode* node)
   }
   case(fin+fbox+ftar):
   case(fin+fbox):
+  case(fin+fbox+forb):
+  case(fin+fbox+ftar+forb):
   {
      // box 
      if(board[i+dx][j+dy] == fout) 
      { 
        if(debug)printf("Box on edge \n");
+       node->IncreaseBranch();  
+       return node;
+     }  
+     //  
+     if(board[i+dx][j+dy] == (forb+fin)) // special code for forbidden area 
+     { 
+       if(debug)printf("Box to forbidden \n");
        node->IncreaseBranch();  
        return node;
      }  
@@ -446,6 +468,7 @@ TreeNode* Sokoban::go(TreeNode* node)
      board[i-dx][j-dy]-=fsoko;
      if(debug)printf("Box moved NEW node %p type:%i\n",newpos,newpos->GetType());
      newpos->Iter();
+     newpos->IncreasePushes();
      return newpos;
  }
  default:
@@ -546,6 +569,7 @@ int Sokoban::FindSokoban(uint &i, uint &j)
 int Sokoban::DoBoard(std::string file)
 {
  if(ReadBoard(file))return 1;
+ //InputBoard();
  Explore(first);
  //PrintTree(first);
  return 0;
@@ -588,17 +612,27 @@ int Sokoban::Explore(TreeNode* node)
  //fiter--;
  //return 0;
 }
-int main()
+int main(int argc,char **argv)
 {
- int NITER=33;
- Sokoban ss(NITER);
+ int NITER=30;
+ if(argc != 2)
+ {
+  printf("Number of args : %i. Using NITER=%i \n",argc,NITER);
+  //return 1;
+ }
+ else
+ {
+  std::string cislo(argv[1]);
+  NITER = string2int(cislo);
+  printf("NITER= %i \n",NITER);
+ }
+ Sokoban ss(NITER,24);
  ss.SetDebug(0);
  clock_t begin=clock();
  //ss.DoBoard("soko3.txt");
  //ss.DoBoard("aceasy07.txt");
- //ss.DoBoard("akk01.txt");
+ ss.DoBoard("akk03.txt");
  //ss.DoBoard("aenigma01.txt");
- ss.DoBoard("sokomob28.txt");
  clock_t end=clock();
  //printf("sizeof TreeNode %i \n",sizeof(TreeNode));
  printf("Nnodes: %i Iters: %i \n",ss.GetNnodes(),ss.GetNIters());
